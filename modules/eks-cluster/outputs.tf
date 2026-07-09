@@ -99,11 +99,6 @@ output "cluster_iam_role_arn" {
   value       = module.eks.cluster_iam_role_arn
 }
 
-output "ebs_csi_driver_role_arn" {
-  description = "IAM role ARN for the EBS CSI driver (IRSA). Empty string if create_ebs_csi_irsa_role = false"
-  value       = var.enable_irsa && var.create_ebs_csi_irsa_role ? aws_iam_role.ebs_csi_driver[0].arn : ""
-}
-
 ################################################################################
 # Node Groups
 ################################################################################

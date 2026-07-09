@@ -2,50 +2,6 @@
 # VPC — created only when var.vpc_id is NOT provided
 ################################################################################
 
-################################################################################
-# IAM Role for EBS CSI Driver (IRSA)
-# Required so the addon can call EC2 APIs (CreateVolume, AttachVolume, etc.)
-# See: https://docs.aws.amazon.com/eks/latest/userguide/ebs-csi.html
-################################################################################
-
-data "aws_iam_policy_document" "ebs_csi_driver_assume_role" {
-  count = var.enable_irsa && var.create_ebs_csi_irsa_role ? 1 : 0
-
-  statement {
-    effect = "Allow"
-    principals {
-      type        = "Federated"
-      identifiers = [module.eks.oidc_provider_arn]
-    }
-    actions = ["sts:AssumeRoleWithWebIdentity"]
-    condition {
-      test     = "StringEquals"
-      variable = "${module.eks.oidc_provider}:sub"
-      values   = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
-    }
-    condition {
-      test     = "StringEquals"
-      variable = "${module.eks.oidc_provider}:aud"
-      values   = ["sts.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role" "ebs_csi_driver" {
-  count = var.enable_irsa && var.create_ebs_csi_irsa_role ? 1 : 0
-
-  name_prefix        = "${var.cluster_name}-ebs-csi-"
-  assume_role_policy = data.aws_iam_policy_document.ebs_csi_driver_assume_role[0].json
-  tags               = local.common_tags
-}
-
-resource "aws_iam_role_policy_attachment" "ebs_csi_driver" {
-  count = var.enable_irsa && var.create_ebs_csi_irsa_role ? 1 : 0
-
-  role       = aws_iam_role.ebs_csi_driver[0].name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicyV2"
-}
-
 module "vpc" {
   count  = local.create_vpc ? 1 : 0
   source = "app.terraform.io/jose-merchan/vpc/aws"
@@ -177,16 +133,8 @@ module "eks" {
     }
   }
 
-  # Cluster-wide EKS add-ons — inject IRSA role ARN into the EBS CSI driver addon
-  addons = {
-    for addon_key, addon_cfg in var.addons : addon_key => merge(
-      addon_cfg,
-      # If this is the EBS CSI driver and we created an IRSA role, inject the ARN automatically
-      addon_key == "aws-ebs-csi-driver" && var.enable_irsa && var.create_ebs_csi_irsa_role ? {
-        service_account_role_arn = aws_iam_role.ebs_csi_driver[0].arn
-      } : {}
-    )
-  }
+  # Cluster-wide EKS add-ons
+  addons = var.addons
 
   tags = local.common_tags
 }
