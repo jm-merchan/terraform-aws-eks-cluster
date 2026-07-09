@@ -37,7 +37,7 @@ Wraps the [`eks`](https://app.terraform.io/app/jose-merchan/registry/modules/pri
 - `create_kms_key = true` with `enable_kms_key_rotation = true`.
 - All five control-plane log types forwarded to CloudWatch.
 - EBS volumes on every node group are encrypted.
-- Public endpoint CIDRs are validated to reject `0.0.0.0/0`.
+- Public endpoint CIDRs default to `["0.0.0.0/0"]`; **restrict to known CIDRs in production** (e.g. your corporate egress IP or VPN range).
 - Log retention enforced to ≥ 90 days.
 
 ---
@@ -49,7 +49,7 @@ Wraps the [`eks`](https://app.terraform.io/app/jose-merchan/registry/modules/pri
 ```hcl
 module "eks_cluster" {
   source  = "app.terraform.io/jose-merchan/eks-cluster/aws"
-  version = "~> 1.0"
+  version = "~> 0.0"
 
   # Mandatory tags
   environment = "prod"
@@ -94,7 +94,7 @@ module "eks_cluster" {
 ```hcl
 module "eks_cluster" {
   source  = "app.terraform.io/jose-merchan/eks-cluster/aws"
-  version = "~> 1.0"
+  version = "~> 0.0"
 
   # Mandatory tags
   environment = "staging"
@@ -126,7 +126,7 @@ module "eks_cluster" {
 ```hcl
 module "eks_cluster" {
   source  = "app.terraform.io/jose-merchan/eks-cluster/aws"
-  version = "~> 1.0"
+  version = "~> 0.0"
 
   environment = "prod"
   owner       = "infra"
@@ -147,7 +147,7 @@ module "eks_cluster" {
 ```hcl
 module "eks_cluster" {
   source  = "app.terraform.io/jose-merchan/eks-cluster/aws"
-  version = "~> 1.0"
+  version = "~> 0.0"
 
   environment = "dev"
   owner       = "dev-team"
