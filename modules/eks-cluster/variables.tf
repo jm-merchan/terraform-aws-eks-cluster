@@ -172,6 +172,12 @@ variable "node_groups" {
 # EKS Add-ons
 ################################################################################
 
+variable "create_ebs_csi_irsa_role" {
+  description = "Create an IAM Role for the EBS CSI driver using IRSA. Requires enable_irsa = true. The role gets AmazonEBSCSIDriverPolicyV2 attached automatically."
+  type        = bool
+  default     = true
+}
+
 variable "addons" {
   description = "Map of EKS add-on configurations. Defaults to the four core add-ons"
   type = map(object({
