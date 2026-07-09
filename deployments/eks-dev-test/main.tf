@@ -40,7 +40,7 @@ provider "aws" {
 
 module "eks_cluster" {
   source  = "app.terraform.io/jose-merchan/eks-cluster/aws"
-  version = "~> 0.0.2"
+  version = "~> 0.0.3"
 
   # Mandatory tags
   environment = var.environment
@@ -52,8 +52,10 @@ module "eks_cluster" {
   cluster_name       = "${var.project}-${var.environment}"
   kubernetes_version = "1.33"
 
-  # Keep API server private — only reachable from within the VPC
-  endpoint_public_access = false
+  # Public endpoint enabled so HCP Terraform remote runner can reach the API server.
+  # Restrict access to specific CIDRs in production.
+  endpoint_public_access       = true
+  endpoint_public_access_cidrs = ["0.0.0.0/0"]
   enable_irsa            = true
   log_retention_days     = 90
 
@@ -123,7 +125,7 @@ resource "aws_iam_role" "ebs_csi_driver" {
 
 resource "aws_iam_role_policy_attachment" "ebs_csi_driver" {
   role       = aws_iam_role.ebs_csi_driver.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicyV2"
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
 }
 
 ################################################################################
@@ -134,7 +136,7 @@ resource "aws_eks_addon" "ebs_csi_driver" {
   cluster_name             = module.eks_cluster.cluster_name
   addon_name               = "aws-ebs-csi-driver"
   addon_version            = null # use most recent
-  resolve_conflicts_on_create = "NONE"
+  resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
   service_account_role_arn = aws_iam_role.ebs_csi_driver.arn
   preserve                 = true

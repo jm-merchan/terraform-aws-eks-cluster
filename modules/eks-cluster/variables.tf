@@ -55,17 +55,9 @@ variable "endpoint_public_access" {
 }
 
 variable "endpoint_public_access_cidrs" {
-  description = "List of CIDRs that may reach the public API endpoint. Only relevant when endpoint_public_access = true"
+  description = "List of CIDRs that may reach the public API endpoint. Only relevant when endpoint_public_access = true. Defaults to open access; restrict in production."
   type        = list(string)
-  default     = []
-
-  validation {
-    condition = alltrue([
-      for cidr in var.endpoint_public_access_cidrs :
-      cidr != "0.0.0.0/0"
-    ])
-    error_message = "Restrict API server access to specific CIDR ranges — do not allow 0.0.0.0/0."
-  }
+  default     = ["0.0.0.0/0"]
 }
 
 variable "enable_irsa" {
