@@ -5,5 +5,5 @@ output "nginx_load_balancer_hostname" {
 
 output "cluster_name" {
   description = "Name of the EKS cluster serving this app (read from eks-infra-vcs)"
-  value       = local.cluster_name
+  value       = nonsensitive(local.cluster_name)
 }

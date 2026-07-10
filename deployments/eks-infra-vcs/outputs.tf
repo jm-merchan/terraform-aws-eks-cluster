@@ -11,6 +11,7 @@ output "cluster_endpoint" {
 output "cluster_certificate_authority_data" {
   description = "Base64-encoded cluster CA certificate"
   value       = module.eks_cluster.cluster_certificate_authority_data
+  sensitive   = true
 }
 
 output "cluster_version" {
@@ -31,6 +32,7 @@ output "oidc_provider" {
 output "kms_key_arn" {
   description = "ARN of the KMS key used for EKS secrets encryption"
   value       = module.eks_cluster.kms_key_arn
+  sensitive   = true
 }
 
 output "aws_region" {
