@@ -106,56 +106,32 @@ module "eks" {
 
   # Managed node groups — built from var.node_groups
   eks_managed_node_groups = {
-    for name, cfg in var.node_groups : name => merge(
-      # ── fields always present ─────────────────────────────────────────────
-      {
-        min_size       = cfg.min_size
-        max_size       = cfg.max_size
-        desired_size   = cfg.desired_size
-        instance_types = cfg.instance_types
-        capacity_type  = cfg.capacity_type
+    for name, cfg in var.node_groups : name => {
+      min_size       = cfg.min_size
+      max_size       = cfg.max_size
+      desired_size   = cfg.desired_size
+      instance_types = cfg.instance_types
+      capacity_type  = cfg.capacity_type
 
-        # Node disk encryption via launch template — enforced at EBS level.
-        block_device_mappings = {
-          xvda = {
-            device_name = "/dev/xvda"
-            ebs = {
-              volume_size           = cfg.disk_size_gb
-              volume_type           = "gp3"
-              encrypted             = true
-              delete_on_termination = true
-            }
+      # Node disk encryption via launch template — enforced at EBS level.
+      block_device_mappings = {
+        xvda = {
+          device_name = "/dev/xvda"
+          ebs = {
+            volume_size           = cfg.disk_size_gb
+            volume_type           = "gp3"
+            encrypted             = true
+            delete_on_termination = true
           }
         }
-
-        # Only Kubernetes scheduling labels — AWS billing tags go in `tags` only.
-        labels = cfg.labels
-        taints = cfg.taints
-        tags   = merge(local.common_tags, cfg.tags)
-      },
-
-      # ── custom AMI path ───────────────────────────────────────────────────
-      # AWS CONSTRAINT (docs.aws.amazon.com/eks/latest/userguide/launch-templates.html):
-      #   When ami_id is specified in a launch template, the API REJECTS the
-      #   fields amiType, releaseVersion, and version. They must be omitted.
-      #
-      # AWS WARNING: EKS does NOT inject bootstrap user data when a custom
-      #   ami_id is present. The caller MUST supply a complete bootstrap
-      #   script via pre_bootstrap_user_data that calls the EKS bootstrap
-      #   entrypoint with cluster name, endpoint, CA and service CIDR.
-      #
-      # Therefore this block is only merged when ami_id is non-empty:
-      cfg.ami_id != "" ? {
-        ami_id                     = cfg.ami_id
-        enable_bootstrap_user_data = cfg.enable_bootstrap_user_data
-        pre_bootstrap_user_data    = cfg.pre_bootstrap_user_data
-      } : {
-        # Standard EKS-managed AMI path — ami_type and version tracking are valid.
-        ami_type                       = cfg.ami_type
-        ami_release_version            = cfg.ami_release_version
-        use_latest_ami_release_version = cfg.use_latest_ami_release_version
       }
-    )
+
+      # Only Kubernetes scheduling labels — AWS billing tags go in `tags` only.
+      labels = cfg.labels
+      taints = cfg.taints
+
+      tags = merge(local.common_tags, cfg.tags)
+    }
   }
 
   # Cluster-wide EKS add-ons.

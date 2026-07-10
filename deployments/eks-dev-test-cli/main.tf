@@ -32,9 +32,11 @@ provider "aws" {
   region = var.aws_region
 }
 
+# Use the static Kubernetes version string — cluster_version is a computed
+# Use var.kubernetes_version (a known input) instead of a hardcoded string.
 data "aws_eks_addon_version" "ebs_csi_driver" {
   addon_name         = "aws-ebs-csi-driver"
-  kubernetes_version = module.eks_cluster.cluster_version
+  kubernetes_version = var.kubernetes_version
   most_recent        = true
 }
 
@@ -46,7 +48,7 @@ data "aws_eks_addon_version" "ebs_csi_driver" {
 
 module "eks_cluster" {
   source  = "app.terraform.io/jose-merchan/eks-cluster/aws"
-  version = "~> 0.0.4"
+  version = "~> 0.0.10"
 
   # Mandatory tags
   environment = var.environment
@@ -56,12 +58,13 @@ module "eks_cluster" {
 
   # Cluster
   cluster_name       = var.cluster_suffix != "" ? "${var.project}-${var.environment}-${var.cluster_suffix}" : "${var.project}-${var.environment}"
-  kubernetes_version = "1.33"
+  kubernetes_version = var.kubernetes_version
 
   # Public endpoint enabled so HCP Terraform remote runner can reach the API server.
-  # Restrict access to specific CIDRs in production.
+  # Restrict to your organisation's egress IP(s) or the HCP Terraform runner CIDR.
+  # See: https://developer.hashicorp.com/terraform/cloud-docs/architectural-details/ip-ranges
   endpoint_public_access       = true
-  endpoint_public_access_cidrs = ["0.0.0.0/0"]
+  endpoint_public_access_cidrs = var.api_allowed_cidrs
   enable_irsa                  = true
   log_retention_days           = 90
 
@@ -129,32 +132,48 @@ resource "aws_iam_role" "ebs_csi_driver" {
   }
 }
 
+# AmazonEBSCSIDriverPolicyV2 is the current managed policy (V1 is deprecated)
 resource "aws_iam_role_policy_attachment" "ebs_csi_driver" {
   role       = aws_iam_role.ebs_csi_driver.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicyV2"
 }
 
-# KMS permissions — required because node EBS volumes are encrypted with the cluster KMS key
+# KMS permissions — required because node EBS volumes are encrypted with the cluster KMS key.
+# Grant actions are split into a separate statement with the kms:GrantIsForAWSResource
+# condition as required by the AWS EBS CSI driver documentation.
 resource "aws_iam_policy" "ebs_csi_driver_kms" {
   name_prefix = "${var.project}-${var.environment}-ebs-csi-kms-"
   description = "Allow EBS CSI driver to use the cluster KMS key for volume encryption"
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "kms:CreateGrant",
-        "kms:ListGrants",
-        "kms:RevokeGrant",
-        "kms:Encrypt",
-        "kms:Decrypt",
-        "kms:ReEncrypt*",
-        "kms:GenerateDataKey*",
-        "kms:DescribeKey"
-      ]
-      Resource = [module.eks_cluster.kms_key_arn]
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:CreateGrant",
+          "kms:ListGrants",
+          "kms:RevokeGrant",
+        ]
+        Resource = [module.eks_cluster.kms_key_arn]
+        Condition = {
+          Bool = {
+            "kms:GrantIsForAWSResource" = "true"
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+        ]
+        Resource = [module.eks_cluster.kms_key_arn]
+      }
+    ]
   })
 
   tags = {
@@ -184,9 +203,8 @@ resource "aws_eks_addon" "ebs_csi_driver" {
   service_account_role_arn    = aws_iam_role.ebs_csi_driver.arn
   preserve                    = false # false = EKS removes all addon resources on destroy
 
-  namespace_config {
-    namespace = "kube-system"
-  }
+  # namespace_config omitted — aws-ebs-csi-driver always installs to kube-system.
+  # Specifying it is redundant and caused plan errors with older provider versions.
 
   timeouts {
     create = "30m"

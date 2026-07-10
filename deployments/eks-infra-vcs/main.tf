@@ -3,35 +3,12 @@ provider "aws" {
 }
 
 ################################################################################
-# AMI — latest approved Ubuntu 24.04 base image from the internal AMI registry.
-# Two lookups: amd64 (x86_64 instances) and arm64 (Graviton instances).
-# Use data.aws_ami.hc_base_ubuntu["amd64"].id or ["arm64"].id in node_groups.
-################################################################################
-
-data "aws_ami" "hc_base_ubuntu" {
-  for_each = toset(["amd64", "arm64"])
-
-  filter {
-    name   = "name"
-    values = [format("hc-base-ubuntu-2404-%s-*", each.value)]
-  }
-
-  filter {
-    name   = "state"
-    values = ["available"]
-  }
-
-  most_recent = true
-  owners      = ["888995627335"] # ami-prod account
-}
-
-################################################################################
 # EKS Cluster — private registry module (infrastructure only, no app workloads)
 ################################################################################
 
 module "eks_cluster" {
   source  = "app.terraform.io/jose-merchan/eks-cluster/aws"
-  version = "0.0.4"
+  version = "~> 0.0.10"
 
   # Mandatory tags
   environment = var.environment
@@ -52,32 +29,14 @@ module "eks_cluster" {
   log_retention_days           = 90
 
   # Node group — 3 nodes so Vault HA Raft (3 replicas) can schedule.
-  # Uses the latest approved Ubuntu 24.04 x86_64 AMI from the internal registry.
-  #
-  # ⚠️  AWS constraint: when ami_id is set, ami_type/ami_release_version are
-  #     rejected by the EKS API. The module omits them automatically.
-  # ⚠️  EKS does NOT inject bootstrap user data with a custom AMI. The full
-  #     AL2023 NodeConfig bootstrap document is provided via pre_bootstrap_user_data
-  #     so the node can call the EKS API and join the cluster.
-  #     Ref: https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html
   node_groups = {
     dev = {
-      instance_types             = ["t3.medium"] # x86_64 — use amd64 AMI
-      capacity_type              = "ON_DEMAND"
-      min_size                   = 2
-      max_size                   = 5
-      desired_size               = 3
-      disk_size_gb               = 50
-      ami_id                     = data.aws_ami.hc_base_ubuntu["amd64"].id
-      enable_bootstrap_user_data = true
-      # Full bootstrap document required — EKS will not merge user data.
-      # Cluster outputs are referenced so values are always in sync.
-      pre_bootstrap_user_data = templatefile("${path.module}/bootstrap-userdata.tpl", {
-        cluster_name     = var.cluster_name
-        api_endpoint     = module.eks_cluster.cluster_endpoint
-        cluster_ca       = module.eks_cluster.cluster_certificate_authority_data
-        service_cidr     = "10.100.0.0/16" # must match cluster service CIDR
-      })
+      instance_types = ["t3.medium"]
+      capacity_type  = "ON_DEMAND"
+      min_size       = 2
+      max_size       = 5
+      desired_size   = 3
+      disk_size_gb   = 50
     }
   }
 
@@ -217,9 +176,8 @@ resource "aws_eks_addon" "ebs_csi" {
   service_account_role_arn    = aws_iam_role.ebs_csi.arn
   preserve                    = true
 
-  namespace_config {
-    namespace = "kube-system"
-  }
+  # namespace_config omitted — aws-ebs-csi-driver always installs to kube-system.
+  # Specifying it is redundant and caused plan errors with older provider versions.
 
   timeouts {
     create = "30m"

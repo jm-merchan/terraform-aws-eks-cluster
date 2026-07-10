@@ -30,13 +30,7 @@ variable "cost_center" {
 variable "project" {
   description = "Project identifier"
   type        = string
-  default     = "eks-dev-test-cli"
-}
-
-variable "cluster_suffix" {
-  description = "Optional suffix appended to the cluster name. When non-empty the cluster is named <project>-<environment>-<suffix>"
-  type        = string
-  default     = ""
+  default     = "eks-dev-test"
 }
 
 variable "kubernetes_version" {

@@ -32,6 +32,14 @@ provider "aws" {
   region = var.aws_region
 }
 
+# Use the static Kubernetes version string — cluster_version is a computed
+# attribute unknown at plan time and would block the data source resolution.
+data "aws_eks_addon_version" "ebs_csi_driver" {
+  addon_name         = "aws-ebs-csi-driver"
+  kubernetes_version = var.kubernetes_version
+  most_recent        = true
+}
+
 ################################################################################
 # EKS Cluster — private registry module
 # NOTE: aws-ebs-csi-driver addon is excluded here; it is added below after
@@ -40,7 +48,7 @@ provider "aws" {
 
 module "eks_cluster" {
   source  = "app.terraform.io/jose-merchan/eks-cluster/aws"
-  version = "~> 0.0.3"
+  version = "~> 0.0.10"
 
   # Mandatory tags
   environment = var.environment
@@ -50,14 +58,15 @@ module "eks_cluster" {
 
   # Cluster
   cluster_name       = "${var.project}-${var.environment}"
-  kubernetes_version = "1.33"
+  kubernetes_version = var.kubernetes_version
 
   # Public endpoint enabled so HCP Terraform remote runner can reach the API server.
-  # Restrict access to specific CIDRs in production.
+  # Restrict to your organisation's egress IP(s) or the HCP Terraform runner CIDR.
+  # See: https://developer.hashicorp.com/terraform/cloud-docs/architectural-details/ip-ranges
   endpoint_public_access       = true
-  endpoint_public_access_cidrs = ["0.0.0.0/0"]
-  enable_irsa            = true
-  log_retention_days     = 90
+  endpoint_public_access_cidrs = var.api_allowed_cidrs
+  enable_irsa                  = true
+  log_retention_days           = 90
 
   # Dev-sized single node group
   node_groups = {
@@ -82,9 +91,9 @@ module "eks_cluster" {
   # Override addons: exclude aws-ebs-csi-driver — it is installed below
   # after the IRSA role has been created (dependency ordering fix)
   addons = {
-    coredns = { most_recent = true }
+    coredns    = { most_recent = true }
     kube-proxy = { most_recent = true }
-    vpc-cni = { most_recent = true, before_compute = true }
+    vpc-cni    = { most_recent = true, before_compute = true }
   }
 }
 
@@ -123,9 +132,62 @@ resource "aws_iam_role" "ebs_csi_driver" {
   }
 }
 
+# AmazonEBSCSIDriverPolicyV2 is the current managed policy (V1 is deprecated)
 resource "aws_iam_role_policy_attachment" "ebs_csi_driver" {
   role       = aws_iam_role.ebs_csi_driver.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicyV2"
+}
+
+# KMS permissions — required because node EBS volumes are encrypted with the cluster KMS key.
+# Grant actions are split into a separate statement with the kms:GrantIsForAWSResource
+# condition as required by the AWS EBS CSI driver documentation.
+resource "aws_iam_policy" "ebs_csi_driver_kms" {
+  name_prefix = "${var.project}-${var.environment}-ebs-csi-kms-"
+  description = "Allow EBS CSI driver to use the cluster KMS key for volume encryption"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:CreateGrant",
+          "kms:ListGrants",
+          "kms:RevokeGrant",
+        ]
+        Resource = [module.eks_cluster.kms_key_arn]
+        Condition = {
+          Bool = {
+            "kms:GrantIsForAWSResource" = "true"
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+        ]
+        Resource = [module.eks_cluster.kms_key_arn]
+      }
+    ]
+  })
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    CostCenter  = var.cost_center
+    Project     = var.project
+    ManagedBy   = "Terraform"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi_driver_kms" {
+  role       = aws_iam_role.ebs_csi_driver.name
+  policy_arn = aws_iam_policy.ebs_csi_driver_kms.arn
 }
 
 ################################################################################
@@ -133,13 +195,16 @@ resource "aws_iam_role_policy_attachment" "ebs_csi_driver" {
 ################################################################################
 
 resource "aws_eks_addon" "ebs_csi_driver" {
-  cluster_name             = module.eks_cluster.cluster_name
-  addon_name               = "aws-ebs-csi-driver"
-  addon_version            = null # use most recent
+  cluster_name                = module.eks_cluster.cluster_name
+  addon_name                  = "aws-ebs-csi-driver"
+  addon_version               = data.aws_eks_addon_version.ebs_csi_driver.version
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
-  service_account_role_arn = aws_iam_role.ebs_csi_driver.arn
-  preserve                 = true
+  service_account_role_arn    = aws_iam_role.ebs_csi_driver.arn
+  preserve                    = false # false = EKS removes all addon resources on destroy
+
+  # namespace_config omitted — aws-ebs-csi-driver always installs to kube-system.
+  # Specifying it is redundant and caused plan errors with older provider versions.
 
   timeouts {
     create = "30m"
@@ -155,7 +220,11 @@ resource "aws_eks_addon" "ebs_csi_driver" {
     ManagedBy   = "Terraform"
   }
 
-  depends_on = [aws_iam_role_policy_attachment.ebs_csi_driver]
+  depends_on = [
+    module.eks_cluster,
+    aws_iam_role_policy_attachment.ebs_csi_driver,
+    aws_iam_role_policy_attachment.ebs_csi_driver_kms,
+  ]
 }
 
 ################################################################################
@@ -271,14 +340,187 @@ resource "kubernetes_config_map" "nginx_html" {
   data = {
     "index.html" = <<-HTML
       <!DOCTYPE html>
-      <html>
-        <head><title>EKS Dev Test</title></head>
-        <body style="font-family:sans-serif;text-align:center;padding:60px;background:#f0f4f8">
-          <h1>✅ EKS cluster is live!</h1>
-          <p>Environment: <strong>${var.environment}</strong></p>
-          <p>Project: <strong>${var.project}</strong></p>
-          <p>Region: <strong>${var.aws_region}</strong></p>
-          <p><em>Generated by Bob — IBM watsonx AI assistant</em></p>
+      <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>EKS &#x2014; ${var.project}</title>
+          <style>
+            *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+            body {
+              min-height: 100vh;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-family: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+              background: linear-gradient(135deg, #0f0c29, #1a1a6e, #12003d);
+              background-size: 400% 400%;
+              animation: gradientShift 12s ease infinite;
+              color: #f4f4f4;
+              padding: 2rem;
+            }
+
+            @keyframes gradientShift {
+              0%   { background-position: 0% 50%; }
+              50%  { background-position: 100% 50%; }
+              100% { background-position: 0% 50%; }
+            }
+
+            .card {
+              background: rgba(255, 255, 255, 0.07);
+              backdrop-filter: blur(18px);
+              -webkit-backdrop-filter: blur(18px);
+              border: 1px solid rgba(255, 255, 255, 0.15);
+              border-radius: 20px;
+              padding: 3rem 3.5rem;
+              max-width: 560px;
+              width: 100%;
+              box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5);
+              text-align: center;
+            }
+
+            .badge {
+              display: inline-flex;
+              align-items: center;
+              gap: 0.5rem;
+              background: rgba(66, 220, 130, 0.15);
+              border: 1px solid rgba(66, 220, 130, 0.4);
+              color: #42dc82;
+              border-radius: 999px;
+              padding: 0.4rem 1.1rem;
+              font-size: 0.85rem;
+              font-weight: 600;
+              letter-spacing: 0.04em;
+              text-transform: uppercase;
+              margin-bottom: 1.6rem;
+            }
+
+            .badge::before {
+              content: '';
+              width: 8px; height: 8px;
+              border-radius: 50%;
+              background: #42dc82;
+              animation: pulse 1.8s ease-in-out infinite;
+            }
+
+            @keyframes pulse {
+              0%, 100% { opacity: 1; transform: scale(1); }
+              50%       { opacity: 0.4; transform: scale(1.4); }
+            }
+
+            h1 {
+              font-size: 2rem;
+              font-weight: 700;
+              line-height: 1.2;
+              margin-bottom: 0.5rem;
+              background: linear-gradient(90deg, #ffffff, #a8c8ff);
+              -webkit-background-clip: text;
+              -webkit-text-fill-color: transparent;
+              background-clip: text;
+            }
+
+            .subtitle {
+              color: rgba(255,255,255,0.5);
+              font-size: 0.95rem;
+              margin-bottom: 2.2rem;
+            }
+
+            .info-grid {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 1rem;
+              margin-bottom: 2rem;
+            }
+
+            .info-item {
+              background: rgba(255,255,255,0.05);
+              border: 1px solid rgba(255,255,255,0.1);
+              border-radius: 12px;
+              padding: 0.9rem 1rem;
+              text-align: left;
+            }
+
+            .info-label {
+              font-size: 0.72rem;
+              font-weight: 600;
+              letter-spacing: 0.08em;
+              text-transform: uppercase;
+              color: rgba(255,255,255,0.4);
+              margin-bottom: 0.3rem;
+            }
+
+            .info-value {
+              font-size: 0.95rem;
+              font-weight: 600;
+              color: #ffffff;
+            }
+
+            .divider {
+              border: none;
+              border-top: 1px solid rgba(255,255,255,0.1);
+              margin: 0 0 1.5rem;
+            }
+
+            .footer {
+              font-size: 0.78rem;
+              color: rgba(255,255,255,0.35);
+              line-height: 1.6;
+            }
+
+            .footer strong {
+              color: #78a9ff;
+              font-weight: 600;
+            }
+
+            .provider-logo {
+              display: inline-block;
+              margin-top: 1rem;
+              background: rgba(255,255,255,0.06);
+              border: 1px solid rgba(255,255,255,0.1);
+              border-radius: 8px;
+              padding: 0.35rem 0.9rem;
+              font-size: 0.75rem;
+              font-weight: 700;
+              letter-spacing: 0.1em;
+              color: #78a9ff;
+              text-transform: uppercase;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="badge">Cluster Live</div>
+            <h1>EKS Cluster is Ready</h1>
+            <p class="subtitle">Amazon Elastic Kubernetes Service</p>
+
+            <div class="info-grid">
+              <div class="info-item">
+                <div class="info-label">Environment</div>
+                <div class="info-value">${var.environment}</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Project</div>
+                <div class="info-value">${var.project}</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Region</div>
+                <div class="info-value">${var.aws_region}</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">Provider</div>
+                <div class="info-value">AWS</div>
+              </div>
+            </div>
+
+            <hr class="divider" />
+
+            <div class="footer">
+              Generated by <strong>Bob</strong><br/>
+              IBM watsonx AI Assistant
+              <div class="provider-logo">IBM &#x2022; watsonx</div>
+            </div>
+          </div>
         </body>
       </html>
     HTML
