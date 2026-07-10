@@ -116,22 +116,11 @@ variable "node_groups" {
   description = <<-EOT
     Map of EKS managed node group definitions. Each key becomes the node group name.
 
-    AMI override fields (all optional):
-      ami_id                         — Custom AMI ID. When set, ami_type must be "CUSTOM"
-                                       and enable_bootstrap_user_data should be true so the
-                                       EKS bootstrap script is injected into user data.
-      ami_type                       — AMI family. Defaults to AL2023_x86_64_STANDARD.
-                                       Set to "CUSTOM" when supplying ami_id.
-                                       Valid values: AL2023_x86_64_STANDARD,
-                                       AL2023_ARM_64_STANDARD, AL2_x86_64, AL2_ARM_64,
-                                       BOTTLEROCKET_x86_64, BOTTLEROCKET_ARM_64, CUSTOM, etc.
-      ami_release_version            — Pin to a specific EKS-optimised AMI release version.
-      use_latest_ami_release_version — Auto-track the latest release for the ami_type.
-                                       Ignored when ami_id is set.
-      enable_bootstrap_user_data     — Inject the EKS bootstrap script into user data.
-                                       Required when using a custom AMI (ami_id != "").
+    ── Standard path (EKS-managed AMI) ──────────────────────────────────────────
+    Leave ami_id empty (the default). EKS automatically selects and maintains the
+    AMI. You may optionally pin the family via ami_type or a specific release via
+    ami_release_version.
 
-    Example — standard node group (AWS-managed AMI):
       node_groups = {
         general = {
           instance_types = ["m6i.large"]
@@ -139,16 +128,49 @@ variable "node_groups" {
           max_size       = 5
           desired_size   = 2
           disk_size_gb   = 50
+          # ami_type defaults to AL2023_x86_64_STANDARD
+        }
+        arm = {
+          instance_types = ["m7g.large"]
+          ami_type       = "AL2023_ARM_64_STANDARD"
         }
       }
 
-    Example — custom AMI (Ubuntu / hardened):
+    ── Custom AMI path ───────────────────────────────────────────────────────────
+    Set ami_id to a specific AMI ID (e.g. from a data.aws_ami lookup).
+
+    ⚠️  AWS API constraints that apply when ami_id is non-empty:
+      1. ami_type, ami_release_version and use_latest_ami_release_version are
+         REJECTED by the EKS API — the module automatically omits them.
+      2. EKS does NOT inject bootstrap user data. You must supply a complete
+         bootstrap script via pre_bootstrap_user_data that joins the node to the
+         cluster. For AL2 this calls /etc/eks/bootstrap.sh; for AL2023 it
+         provides a NodeConfig MIME document. Missing or incorrect bootstrap
+         user data causes nodes to fail to join the cluster.
+      Reference: https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html
+
       node_groups = {
-        ubuntu = {
-          instance_types             = ["m6i.large"]
+        hardened = {
+          instance_types             = ["m6i.large"]   # x86_64
           ami_id                     = data.aws_ami.hc_base_ubuntu["amd64"].id
-          ami_type                   = "CUSTOM"
           enable_bootstrap_user_data = true
+          pre_bootstrap_user_data    = <<-USERDATA
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="BOUNDARY"
+
+            --BOUNDARY
+            Content-Type: application/node.eks.aws
+
+            apiVersion: node.eks.aws/v1alpha1
+            kind: NodeConfig
+            spec:
+              cluster:
+                name: <cluster-name>
+                apiServerEndpoint: <endpoint>
+                certificateAuthority: <base64-ca>
+                cidr: <service-cidr>
+            --BOUNDARY--
+          USERDATA
           min_size                   = 1
           max_size                   = 5
           desired_size               = 2
@@ -164,12 +186,23 @@ variable "node_groups" {
     desired_size   = optional(number, 2)
     disk_size_gb   = optional(number, 50)
 
-    # AMI overrides — leave null/empty to use the EKS-managed default AMI
+    # ── Custom AMI fields (standard path: leave ami_id = "") ─────────────────
+    # When ami_id is set the EKS API REJECTS ami_type / ami_release_version.
+    # The module conditionally omits those fields based on whether ami_id != "".
     ami_id                         = optional(string, "")
-    ami_type                       = optional(string, "AL2023_x86_64_STANDARD")
     ami_release_version            = optional(string, null)
     use_latest_ami_release_version = optional(bool, true)
-    enable_bootstrap_user_data     = optional(bool, false)
+
+    # ami_type is only valid when ami_id is empty (standard path).
+    # Valid values: AL2023_x86_64_STANDARD, AL2023_ARM_64_STANDARD,
+    #   AL2_x86_64, AL2_ARM_64, BOTTLEROCKET_x86_64, BOTTLEROCKET_ARM_64, etc.
+    ami_type = optional(string, "AL2023_x86_64_STANDARD")
+
+    # ── Bootstrap user data (only relevant when ami_id is set) ───────────────
+    # EKS does NOT inject bootstrap user data when a custom ami_id is present.
+    # The caller must supply a complete MIME/NodeConfig bootstrap document.
+    enable_bootstrap_user_data = optional(bool, false)
+    pre_bootstrap_user_data    = optional(string, null)
 
     labels = optional(map(string), {})
     taints = optional(map(object({
