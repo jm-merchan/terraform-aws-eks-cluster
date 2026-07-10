@@ -53,20 +53,31 @@ module "eks_cluster" {
 
   # Node group — 3 nodes so Vault HA Raft (3 replicas) can schedule.
   # Uses the latest approved Ubuntu 24.04 x86_64 AMI from the internal registry.
-  # ami_type = "CUSTOM" is required when supplying a custom ami_id.
-  # enable_bootstrap_user_data = true injects the EKS bootstrap script so the
-  # node registers itself with the control plane.
+  #
+  # ⚠️  AWS constraint: when ami_id is set, ami_type/ami_release_version are
+  #     rejected by the EKS API. The module omits them automatically.
+  # ⚠️  EKS does NOT inject bootstrap user data with a custom AMI. The full
+  #     AL2023 NodeConfig bootstrap document is provided via pre_bootstrap_user_data
+  #     so the node can call the EKS API and join the cluster.
+  #     Ref: https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html
   node_groups = {
     dev = {
-      instance_types             = ["t3.medium"]      # x86_64 — use amd64 AMI
+      instance_types             = ["t3.medium"] # x86_64 — use amd64 AMI
       capacity_type              = "ON_DEMAND"
       min_size                   = 2
       max_size                   = 5
       desired_size               = 3
       disk_size_gb               = 50
       ami_id                     = data.aws_ami.hc_base_ubuntu["amd64"].id
-      ami_type                   = "CUSTOM"
       enable_bootstrap_user_data = true
+      # Full bootstrap document required — EKS will not merge user data.
+      # Cluster outputs are referenced so values are always in sync.
+      pre_bootstrap_user_data = templatefile("${path.module}/bootstrap-userdata.tpl", {
+        cluster_name     = var.cluster_name
+        api_endpoint     = module.eks_cluster.cluster_endpoint
+        cluster_ca       = module.eks_cluster.cluster_certificate_authority_data
+        service_cidr     = "10.100.0.0/16" # must match cluster service CIDR
+      })
     }
   }
 
