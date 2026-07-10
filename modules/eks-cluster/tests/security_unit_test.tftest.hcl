@@ -60,7 +60,6 @@ run "private_endpoint_always_on" {
 
   # Even when public access is explicitly enabled, private must still be on.
   # endpoint_private_access is hardcoded to true in main.tf — verify it via the variable.
-  # A restricted CIDR is used so the new endpoint_public_access_cidrs validation passes.
   variables {
     endpoint_public_access       = true
     endpoint_public_access_cidrs = ["203.0.113.0/24"]
