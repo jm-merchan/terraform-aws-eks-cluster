@@ -113,6 +113,17 @@ module "eks" {
       instance_types = cfg.instance_types
       capacity_type  = cfg.capacity_type
 
+      # AMI overrides — only forwarded when the caller sets them explicitly.
+      # ami_id = "" (the default) tells the upstream module to use the EKS default AMI.
+      # When a custom AMI is provided, ami_type must be "CUSTOM" and
+      # enable_bootstrap_user_data must be true so the EKS bootstrap script is
+      # injected; otherwise the node will not join the cluster.
+      ami_id                         = cfg.ami_id
+      ami_type                       = cfg.ami_type
+      ami_release_version            = cfg.ami_release_version
+      use_latest_ami_release_version = cfg.use_latest_ami_release_version
+      enable_bootstrap_user_data     = cfg.enable_bootstrap_user_data
+
       # Node disk encryption using the cluster KMS key is handled by the node
       # group launch template; encrypted = true enforces it at the EBS level.
       block_device_mappings = {

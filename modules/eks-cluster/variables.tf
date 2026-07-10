@@ -115,7 +115,23 @@ variable "access_entries" {
 variable "node_groups" {
   description = <<-EOT
     Map of EKS managed node group definitions. Each key becomes the node group name.
-    Example:
+
+    AMI override fields (all optional):
+      ami_id                         — Custom AMI ID. When set, ami_type must be "CUSTOM"
+                                       and enable_bootstrap_user_data should be true so the
+                                       EKS bootstrap script is injected into user data.
+      ami_type                       — AMI family. Defaults to AL2023_x86_64_STANDARD.
+                                       Set to "CUSTOM" when supplying ami_id.
+                                       Valid values: AL2023_x86_64_STANDARD,
+                                       AL2023_ARM_64_STANDARD, AL2_x86_64, AL2_ARM_64,
+                                       BOTTLEROCKET_x86_64, BOTTLEROCKET_ARM_64, CUSTOM, etc.
+      ami_release_version            — Pin to a specific EKS-optimised AMI release version.
+      use_latest_ami_release_version — Auto-track the latest release for the ami_type.
+                                       Ignored when ami_id is set.
+      enable_bootstrap_user_data     — Inject the EKS bootstrap script into user data.
+                                       Required when using a custom AMI (ami_id != "").
+
+    Example — standard node group (AWS-managed AMI):
       node_groups = {
         general = {
           instance_types = ["m6i.large"]
@@ -123,6 +139,20 @@ variable "node_groups" {
           max_size       = 5
           desired_size   = 2
           disk_size_gb   = 50
+        }
+      }
+
+    Example — custom AMI (Ubuntu / hardened):
+      node_groups = {
+        ubuntu = {
+          instance_types             = ["m6i.large"]
+          ami_id                     = data.aws_ami.hc_base_ubuntu["amd64"].id
+          ami_type                   = "CUSTOM"
+          enable_bootstrap_user_data = true
+          min_size                   = 1
+          max_size                   = 5
+          desired_size               = 2
+          disk_size_gb               = 50
         }
       }
   EOT
@@ -133,7 +163,15 @@ variable "node_groups" {
     max_size       = optional(number, 3)
     desired_size   = optional(number, 2)
     disk_size_gb   = optional(number, 50)
-    labels         = optional(map(string), {})
+
+    # AMI overrides — leave null/empty to use the EKS-managed default AMI
+    ami_id                         = optional(string, "")
+    ami_type                       = optional(string, "AL2023_x86_64_STANDARD")
+    ami_release_version            = optional(string, null)
+    use_latest_ami_release_version = optional(bool, true)
+    enable_bootstrap_user_data     = optional(bool, false)
+
+    labels = optional(map(string), {})
     taints = optional(map(object({
       key    = string
       value  = optional(string)
