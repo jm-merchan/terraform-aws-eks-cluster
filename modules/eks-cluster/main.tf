@@ -76,10 +76,11 @@ module "eks" {
   endpoint_public_access_cidrs = var.endpoint_public_access_cidrs
 
   # Secrets encryption using KMS — always on
+  # encryption_config must be a list of objects per the upstream terraform-aws-modules/eks API
   create_kms_key    = true
-  encryption_config = {
+  cluster_encryption_config = [{
     resources = ["secrets"]
-  }
+  }]
   enable_kms_key_rotation = true
 
   # IRSA (IAM Roles for Service Accounts)
@@ -126,15 +127,20 @@ module "eks" {
         }
       }
 
-      labels = merge(local.common_tags, cfg.labels)
+      # Only pass Kubernetes scheduling labels — do NOT merge AWS billing tags into
+      # node labels. AWS tags belong in the tags map only.
+      labels = cfg.labels
       taints = cfg.taints
 
       tags = merge(local.common_tags, cfg.tags)
     }
   }
 
-  # Cluster-wide EKS add-ons
-  addons = var.addons
+  # Cluster-wide EKS add-ons.
+  # aws-ebs-csi-driver is intentionally excluded from the module default and must
+  # be added by the caller AFTER creating an IRSA role, so that
+  # service_account_role_arn can be wired at that layer.
+  cluster_addons = var.addons
 
   tags = local.common_tags
 }

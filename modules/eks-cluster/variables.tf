@@ -55,9 +55,15 @@ variable "endpoint_public_access" {
 }
 
 variable "endpoint_public_access_cidrs" {
-  description = "List of CIDRs that may reach the public API endpoint. Only relevant when endpoint_public_access = true. Defaults to open access; restrict in production."
+  description = "List of CIDRs that may reach the public API endpoint. Only relevant when endpoint_public_access = true. Must not contain 0.0.0.0/0 — restrict to known IP ranges."
   type        = list(string)
-  default     = ["0.0.0.0/0"]
+  # No default — callers must provide a restricted list when endpoint_public_access = true.
+  # Example: ["203.0.113.0/24"]
+
+  validation {
+    condition     = !contains(var.endpoint_public_access_cidrs, "0.0.0.0/0")
+    error_message = "endpoint_public_access_cidrs must not contain 0.0.0.0/0. Restrict to specific CIDR ranges."
+  }
 }
 
 variable "enable_irsa" {
@@ -173,7 +179,7 @@ variable "addons" {
     addon_version               = optional(string)
     configuration_values        = optional(string)
     preserve                    = optional(bool, true)
-    resolve_conflicts_on_create = optional(string, "NONE")
+    resolve_conflicts_on_create = optional(string, "OVERWRITE")
     resolve_conflicts_on_update = optional(string, "OVERWRITE")
     service_account_role_arn    = optional(string)
     timeouts = optional(object({
@@ -183,6 +189,9 @@ variable "addons" {
     }), {})
     tags = optional(map(string), {})
   }))
+  # aws-ebs-csi-driver is intentionally excluded from the default.
+  # Callers must install it as a separate aws_eks_addon resource after
+  # creating an IRSA role so that service_account_role_arn can be provided.
   default = {
     coredns = {
       most_recent = true
@@ -193,9 +202,6 @@ variable "addons" {
     vpc-cni = {
       most_recent    = true
       before_compute = true
-    }
-    aws-ebs-csi-driver = {
-      most_recent = true
     }
   }
 }

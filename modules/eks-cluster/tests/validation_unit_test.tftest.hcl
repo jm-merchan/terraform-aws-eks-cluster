@@ -54,6 +54,7 @@ run "rejects_invalid_environment" {
 }
 
 # ── endpoint_public_access_cidrs — must not allow 0.0.0.0/0 ─────────────────
+# The validation rule was added to variables.tf to enforce this.
 
 run "rejects_open_public_access_cidr" {
   command = plan
@@ -61,6 +62,7 @@ run "rejects_open_public_access_cidr" {
   variables {
     endpoint_public_access       = true
     endpoint_public_access_cidrs = ["0.0.0.0/0"]
+    node_groups                  = { default = {} }
   }
 
   expect_failures = [var.endpoint_public_access_cidrs]
