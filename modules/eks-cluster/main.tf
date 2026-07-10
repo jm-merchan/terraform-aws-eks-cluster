@@ -71,17 +71,17 @@ module "eks" {
   subnet_ids = local.subnet_ids
 
   # Control-plane API server endpoint access
-  endpoint_private_access   = true
-  endpoint_public_access    = var.endpoint_public_access
+  endpoint_private_access      = true
+  endpoint_public_access       = var.endpoint_public_access
   endpoint_public_access_cidrs = var.endpoint_public_access_cidrs
 
-  # Secrets encryption using KMS — always on
-  # encryption_config must be a list of objects per the upstream terraform-aws-modules/eks API
-  create_kms_key    = true
-  cluster_encryption_config = [{
-    resources = ["secrets"]
-  }]
+  # Secrets encryption using KMS — always on.
+  # The jose-merchan/eks module takes encryption_config as a single object (not a list).
+  create_kms_key          = true
   enable_kms_key_rotation = true
+  encryption_config = {
+    resources = ["secrets"]
+  }
 
   # IRSA (IAM Roles for Service Accounts)
   enable_irsa = var.enable_irsa
@@ -95,7 +95,6 @@ module "eks" {
     "scheduler",
   ]
 
-  create_cloudwatch_log_group            = true
   cloudwatch_log_group_retention_in_days = var.log_retention_days
 
   # Give the Terraform caller cluster-admin by default (can be disabled)
@@ -138,7 +137,7 @@ module "eks" {
   # aws-ebs-csi-driver is intentionally excluded from the module default and must
   # be added by the caller AFTER creating an IRSA role, so that
   # service_account_role_arn can be wired at that layer.
-  cluster_addons = var.addons
+  addons = var.addons
 
   tags = local.common_tags
 }
